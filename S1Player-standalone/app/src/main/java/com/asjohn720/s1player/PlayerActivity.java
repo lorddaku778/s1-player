@@ -64,6 +64,11 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
     private GradientDrawable playBg;
     private LinearLayout root;
     private ListView list;
+    private TextView tabQueue, tabSound;
+    private android.widget.ScrollView soundScroll;
+    private final SeekBar[] fxBars = new SeekBar[5];
+    private final TextView[] fxVals = new TextView[5];
+    private boolean syncing;
     private QueueAdapter adapter;
     private boolean touching;
     private String artFor = "";
@@ -75,6 +80,7 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
             svc = ((PlayerService.LocalBinder) b).get();
             svc.setListener(PlayerActivity.this);
             if (svc.queue().isEmpty()) svc.setQueue(files);
+            syncFx();
             refresh();
         }
         @Override public void onServiceDisconnected(ComponentName n) { svc = null; }
@@ -326,9 +332,20 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
         q.setOrientation(LinearLayout.VERTICAL);
         q.setBackground(rounded(0x66000000, dp(12)));
         q.setPadding(dp(4), dp(6), dp(4), dp(4));
-        TextView qt = text("Up next", 12, GREY, true);
-        qt.setPadding(dp(8), 0, 0, dp(4));
-        q.addView(qt);
+        LinearLayout tabs = new LinearLayout(this);
+        tabQueue = text("Up next", 12, WHITE, true);
+        tabSound = text("Sound", 12, DIM, true);
+        tabQueue.setPadding(dp(8), dp(2), dp(16), dp(6));
+        tabSound.setPadding(0, dp(2), dp(8), dp(6));
+        tabQueue.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { showTab(false); }
+        });
+        tabSound.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { showTab(true); }
+        });
+        tabs.addView(tabQueue);
+        tabs.addView(tabSound);
+        q.addView(tabs);
         list = new ListView(this);
         list.setDivider(null);
         list.setOnItemClickListener(new AdapterView.OnItemClickListener() {
@@ -336,10 +353,111 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
                 if (svc != null) { svc.setQueue(files); svc.play(pos); }
             }
         });
-        q.addView(list, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        FrameLayout body = new FrameLayout(this);
+        body.addView(list, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        soundScroll = buildSoundPanel();
+        soundScroll.setVisibility(View.GONE);
+        body.addView(soundScroll, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        q.addView(body, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         root.addView(q, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.9f));
 
         setContentView(screen);
+    }
+
+    private void showTab(boolean sound) {
+        list.setVisibility(sound ? View.GONE : View.VISIBLE);
+        soundScroll.setVisibility(sound ? View.VISIBLE : View.GONE);
+        tabQueue.setTextColor(sound ? DIM : WHITE);
+        tabSound.setTextColor(sound ? WHITE : DIM);
+        if (sound) syncFx();
+    }
+
+    private static final String[] FX_NAMES = {
+            "Sound field / position", "Surround / 3D sound", "Virtual subwoofer", "Bass level", "Loudness"};
+
+    private android.widget.ScrollView buildSoundPanel() {
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(8), 0, dp(8), dp(6));
+
+        LinearLayout chips = new LinearLayout(this);
+        chips.addView(chip("Flat", new int[]{100, 0, 0, 0, 0}));
+        chips.addView(chip("Cinema", new int[]{100, 70, 40, 40, 30}));
+        chips.addView(chip("Bass", new int[]{100, 20, 70, 80, 20}));
+        col.addView(chips);
+
+        for (int i = 0; i < 5; i++) {
+            final int idx = i;
+            LinearLayout head = new LinearLayout(this);
+            TextView name = text(FX_NAMES[i], 12, WHITE, false);
+            fxVals[i] = text("", 11, GREY, false);
+            head.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            head.addView(fxVals[i]);
+            LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            hp.topMargin = dp(6);
+            col.addView(head, hp);
+
+            SeekBar sb = new SeekBar(this);
+            sb.setMax(i == 0 ? 200 : 100);
+            sb.setProgressTintList(ColorStateList.valueOf(WHITE));
+            sb.setThumbTintList(ColorStateList.valueOf(WHITE));
+            sb.setProgressBackgroundTintList(ColorStateList.valueOf(0x55FFFFFF));
+            sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override public void onProgressChanged(SeekBar s, int p, boolean user) {
+                    fxLabel(idx, p);
+                    if (user && !syncing && svc != null) svc.fxSet(idx, p);
+                }
+                @Override public void onStartTrackingTouch(SeekBar s) { }
+                @Override public void onStopTrackingTouch(SeekBar s) { }
+            });
+            fxBars[i] = sb;
+            col.addView(sb);
+        }
+        sv.addView(col);
+        return sv;
+    }
+
+    private TextView chip(String label, final int[] values) {
+        TextView t = text(label, 12, WHITE, true);
+        t.setBackground(rounded(0x33FFFFFF, dp(8)));
+        t.setPadding(dp(12), dp(5), dp(12), dp(5));
+        t.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                if (svc == null) return;
+                for (int i = 0; i < values.length; i++) svc.fxSet(i, values[i]);
+                syncFx();
+            }
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.rightMargin = dp(6);
+        t.setLayoutParams(lp);
+        return t;
+    }
+
+    private void fxLabel(int i, int p) {
+        if (i == 0) {
+            int b = p - 100;
+            fxVals[i].setText(b == 0 ? "Centre" : (b < 0 ? "Left " : "Right ") + Math.abs(b) + "%");
+        } else {
+            fxVals[i].setText(p == 0 ? "Off" : p + "%");
+        }
+    }
+
+    private void syncFx() {
+        if (svc == null) return;
+        syncing = true;
+        for (int i = 0; i < 5; i++) {
+            boolean ok = svc.fxSupported(i);
+            fxBars[i].setEnabled(ok);
+            fxBars[i].setProgress(svc.fxGet(i));
+            if (ok) fxLabel(i, svc.fxGet(i)); else fxVals[i].setText("not supported");
+        }
+        syncing = false;
     }
 
     private TextView text(String t, float sp, int color, boolean bold) {
