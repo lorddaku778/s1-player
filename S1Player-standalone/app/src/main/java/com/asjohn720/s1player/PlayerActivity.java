@@ -63,6 +63,7 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
     private ImageButton btnPlay, btnShuffle, btnRepeat;
     private GradientDrawable playBg;
     private LinearLayout root;
+    private ImageView bgBlur;
     private ListView list;
     private TextView tabQueue, tabSound;
     private android.widget.ScrollView soundScroll;
@@ -224,7 +225,7 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
     private ImageButton iconBtn(int res, int sizeDp, View.OnClickListener l) {
         ImageButton b = new ImageButton(this);
         b.setImageResource(res);
-        b.setBackground(null);
+        b.setBackground(glassCircle());
         b.setColorFilter(WHITE);
         b.setScaleType(ImageView.ScaleType.FIT_CENTER);
         int pad = dp(sizeDp / 5f);
@@ -245,14 +246,23 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.HORIZONTAL);
         root.setPadding(pad, pad, pad, pad);
-        root.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{dominant, 0xFF000000}));
+        // Glass look: a blurred copy of the album art sits behind frosted, see-through panels.
+        bgBlur = new ImageView(this);
+        bgBlur.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        bgBlur.setImageDrawable(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{dominant, 0xFF000000}));
+        screen.addView(bgBlur, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h));
+        View scrim = new View(this);
+        scrim.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0x55000000, 0xAA000000}));
+        screen.addView(scrim, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h));
         screen.addView(root, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h));
 
         // --- album art
         int artSize = h - pad * 2;
         art = new ImageView(this);
         art.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        art.setBackground(rounded(0xFF1E1E1E, dp(12)));
+        art.setBackground(glass(dp(12), true));
         art.setClipToOutline(true);
         art.setImageResource(R.drawable.ic_note);
         art.setColorFilter(DIM);
@@ -264,6 +274,7 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
         mid.setOrientation(LinearLayout.VERTICAL);
         mid.setGravity(Gravity.CENTER_VERTICAL);
         mid.setPadding(dp(14), 0, dp(14), 0);
+        mid.setBackground(glass(dp(12), false));
         root.addView(mid, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.1f));
 
         title = text("S1 Player", 18, WHITE, true);
@@ -310,7 +321,8 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
         });
         playBg = new GradientDrawable();
         playBg.setShape(GradientDrawable.OVAL);
-        playBg.setColor(WHITE);
+        playBg.setColor(0xF2FFFFFF);
+        playBg.setStroke(Math.max(1, dp(1)), 0x80FFFFFF);
         btnPlay.setBackground(playBg);
         btnPlay.setColorFilter(0xFF000000);
         ImageButton next = iconBtn(R.drawable.ic_next, 46, new View.OnClickListener() {
@@ -330,7 +342,7 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
         // --- queue
         LinearLayout q = new LinearLayout(this);
         q.setOrientation(LinearLayout.VERTICAL);
-        q.setBackground(rounded(0x66000000, dp(12)));
+        q.setBackground(glass(dp(12), false));
         q.setPadding(dp(4), dp(6), dp(4), dp(4));
         LinearLayout tabs = new LinearLayout(this);
         tabQueue = text("Up next", 12, WHITE, true);
@@ -423,7 +435,7 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
 
     private TextView chip(String label, final int[] values) {
         TextView t = text(label, 12, WHITE, true);
-        t.setBackground(rounded(0x33FFFFFF, dp(8)));
+        t.setBackground(glass(dp(8), true));
         t.setPadding(dp(12), dp(5), dp(12), dp(5));
         t.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
@@ -471,6 +483,25 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
         return v;
     }
 
+    /** Frosted-glass panel: light top-to-bottom sheen, thin bright edge, rounded corners. */
+    private GradientDrawable glass(int radius, boolean strong) {
+        int top = strong ? 0x48FFFFFF : 0x2EFFFFFF;
+        int bottom = strong ? 0x22FFFFFF : 0x12FFFFFF;
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{top, bottom});
+        g.setCornerRadius(radius);
+        g.setStroke(Math.max(1, dp(1)), strong ? 0x66FFFFFF : 0x40FFFFFF);
+        return g;
+    }
+
+    private GradientDrawable glassCircle() {
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0x3CFFFFFF, 0x14FFFFFF});
+        g.setShape(GradientDrawable.OVAL);
+        g.setStroke(Math.max(1, dp(1)), 0x4DFFFFFF);
+        return g;
+    }
+
     private GradientDrawable rounded(int color, int radius) {
         GradientDrawable g = new GradientDrawable();
         g.setColor(color);
@@ -501,7 +532,7 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
             a.setTextColor(current ? WHITE : 0xFFD0D0D0);
             a.setTypeface(current ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
             b.setText(artistOf(f));
-            row.setBackground(current ? rounded(0x33FFFFFF, dp(8)) : null);
+            row.setBackground(current ? glass(dp(8), true) : null);
             return row;
         }
     }
@@ -574,8 +605,15 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
                             art.setColorFilter(DIM);
                             dominant = 0xFF161616;
                         }
-                        root.setBackground(new GradientDrawable(
-                                GradientDrawable.Orientation.TL_BR, new int[]{dominant, 0xFF000000}));
+                        if (result != null) {
+                            // Two small scale steps with filtering give a cheap, smooth blur.
+                            Bitmap tiny = Bitmap.createScaledBitmap(result, 24, 24, true);
+                            Bitmap soft = Bitmap.createScaledBitmap(tiny, 96, 96, true);
+                            bgBlur.setImageBitmap(soft);
+                        } else {
+                            bgBlur.setImageDrawable(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                                    new int[]{dominant, 0xFF000000}));
+                        }
                     }
                 });
             }
