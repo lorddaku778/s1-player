@@ -10,7 +10,27 @@ import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.BitmapShader;
+import android.graphics.Canvas;
+import android.graphics.ColorMatrix;
+import android.graphics.ColorMatrixColorFilter;
+import android.graphics.Matrix;
+import android.graphics.Path;
+import android.graphics.Rect;
 import android.graphics.Color;
+import android.graphics.ColorFilter;
+import android.graphics.LinearGradient;
+import android.graphics.Outline;
+import android.graphics.Paint;
+import android.graphics.PixelFormat;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffXfermode;
+import android.graphics.RadialGradient;
+import android.graphics.RectF;
+import android.graphics.Shader;
+import android.graphics.drawable.ClipDrawable;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.LayerDrawable;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.media.MediaMetadataRetriever;
@@ -50,7 +70,7 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
 
     private static final int WHITE = 0xFFFFFFFF;
     private static final int GREY = 0xFFB3B3B3;
-    private static final int DIM = 0xFF6E6E6E;
+    private static final int DIM = 0xFF9A9A9A;
 
     private PlayerService svc;
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -61,9 +81,15 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
     private TextView title, artist, tPos, tDur, count;
     private SeekBar seek;
     private ImageButton btnPlay, btnShuffle, btnRepeat;
-    private GradientDrawable playBg;
+    private Drawable playBg;
     private LinearLayout root;
     private ImageView bgBlur;
+    private Bitmap backdropBmp;
+    private final java.util.ArrayList<View> glassViews = new java.util.ArrayList<View>();
+    private final Backdrop backdrop = new Backdrop() {
+        @Override public Bitmap bitmap() { return backdropBmp; }
+        @Override public View anchor() { return bgBlur; }
+    };
     private ListView list;
     private TextView tabQueue, tabSound;
     private android.widget.ScrollView soundScroll;
@@ -225,7 +251,7 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
     private ImageButton iconBtn(int res, int sizeDp, View.OnClickListener l) {
         ImageButton b = new ImageButton(this);
         b.setImageResource(res);
-        b.setBackground(glassCircle());
+        b.setBackground(null);
         b.setColorFilter(WHITE);
         b.setScaleType(ImageView.ScaleType.FIT_CENTER);
         int pad = dp(sizeDp / 5f);
@@ -248,14 +274,10 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
         root.setPadding(pad, pad, pad, pad);
         // Glass look: a blurred copy of the album art sits behind frosted, see-through panels.
         bgBlur = new ImageView(this);
-        bgBlur.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        bgBlur.setImageDrawable(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{dominant, 0xFF000000}));
+        bgBlur.setScaleType(ImageView.ScaleType.FIT_XY);
+        backdropBmp = makeBackdrop(null);
+        bgBlur.setImageBitmap(backdropBmp);
         screen.addView(bgBlur, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h));
-        View scrim = new View(this);
-        scrim.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{0x55000000, 0xAA000000}));
-        screen.addView(scrim, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h));
         screen.addView(root, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h));
 
         // --- album art
@@ -264,6 +286,7 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
         art.setScaleType(ImageView.ScaleType.CENTER_CROP);
         art.setBackground(glass(dp(12), true));
         art.setClipToOutline(true);
+        art.setForeground(new GlassDrawable(dp(12), false, true, true, Math.max(1.5f, dp(1.5f)), null));
         art.setImageResource(R.drawable.ic_note);
         art.setColorFilter(DIM);
         art.setPadding(artSize / 4, artSize / 4, artSize / 4, artSize / 4);
@@ -275,6 +298,7 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
         mid.setGravity(Gravity.CENTER_VERTICAL);
         mid.setPadding(dp(14), 0, dp(14), 0);
         mid.setBackground(glass(dp(12), false));
+        glassViews.add(mid);
         root.addView(mid, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.1f));
 
         title = text("S1 Player", 18, WHITE, true);
@@ -289,9 +313,7 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
         tPos = text("0:00", 11, GREY, false);
         tDur = text("0:00", 11, GREY, false);
         seek = new SeekBar(this);
-        seek.setProgressTintList(ColorStateList.valueOf(WHITE));
-        seek.setThumbTintList(ColorStateList.valueOf(WHITE));
-        seek.setProgressBackgroundTintList(ColorStateList.valueOf(0x55FFFFFF));
+        styleSeek(seek);
         seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar s, int p, boolean user) { if (user) tPos.setText(fmt(p)); }
             @Override public void onStartTrackingTouch(SeekBar s) { touching = true; }
@@ -310,25 +332,23 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
 
         LinearLayout ctl = new LinearLayout(this);
         ctl.setGravity(Gravity.CENTER);
-        btnShuffle = iconBtn(R.drawable.ic_shuffle, 40, new View.OnClickListener() {
+        btnShuffle = iconBtn(R.drawable.ic_shuffle, 30, new View.OnClickListener() {
             @Override public void onClick(View v) { if (svc != null) svc.toggleShuffle(); }
         });
-        ImageButton prev = iconBtn(R.drawable.ic_prev, 46, new View.OnClickListener() {
+        ImageButton prev = iconBtn(R.drawable.ic_prev, 34, new View.OnClickListener() {
             @Override public void onClick(View v) { if (svc != null) svc.prev(); }
         });
-        btnPlay = iconBtn(R.drawable.ic_play, 58, new View.OnClickListener() {
+        btnPlay = iconBtn(R.drawable.ic_play, 44, new View.OnClickListener() {
             @Override public void onClick(View v) { if (svc != null) svc.toggle(); }
         });
-        playBg = new GradientDrawable();
-        playBg.setShape(GradientDrawable.OVAL);
-        playBg.setColor(0xF2FFFFFF);
-        playBg.setStroke(Math.max(1, dp(1)), 0x80FFFFFF);
+        playBg = new GlassDrawable(0, true, false, true, Math.max(1.5f, dp(1.5f)), backdrop);
+        glassViews.add(btnPlay);
         btnPlay.setBackground(playBg);
-        btnPlay.setColorFilter(0xFF000000);
-        ImageButton next = iconBtn(R.drawable.ic_next, 46, new View.OnClickListener() {
+        btnPlay.setColorFilter(WHITE);
+        ImageButton next = iconBtn(R.drawable.ic_next, 34, new View.OnClickListener() {
             @Override public void onClick(View v) { if (svc != null) svc.next(); }
         });
-        btnRepeat = iconBtn(R.drawable.ic_repeat, 40, new View.OnClickListener() {
+        btnRepeat = iconBtn(R.drawable.ic_repeat, 30, new View.OnClickListener() {
             @Override public void onClick(View v) { if (svc != null) svc.toggleRepeat(); }
         });
         for (View v : new View[]{btnShuffle, prev, btnPlay, next, btnRepeat}) {
@@ -343,6 +363,7 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
         LinearLayout q = new LinearLayout(this);
         q.setOrientation(LinearLayout.VERTICAL);
         q.setBackground(glass(dp(12), false));
+        glassViews.add(q);
         q.setPadding(dp(4), dp(6), dp(4), dp(4));
         LinearLayout tabs = new LinearLayout(this);
         tabQueue = text("Up next", 12, WHITE, true);
@@ -415,9 +436,7 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
 
             SeekBar sb = new SeekBar(this);
             sb.setMax(i == 0 ? 200 : 100);
-            sb.setProgressTintList(ColorStateList.valueOf(WHITE));
-            sb.setThumbTintList(ColorStateList.valueOf(WHITE));
-            sb.setProgressBackgroundTintList(ColorStateList.valueOf(0x55FFFFFF));
+            styleSeek(sb);
             sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
                 @Override public void onProgressChanged(SeekBar s, int p, boolean user) {
                     fxLabel(idx, p);
@@ -435,7 +454,7 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
 
     private TextView chip(String label, final int[] values) {
         TextView t = text(label, 12, WHITE, true);
-        t.setBackground(glass(dp(8), true));
+        t.setBackground(glassFlat(dp(8), true));
         t.setPadding(dp(12), dp(5), dp(12), dp(5));
         t.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
@@ -483,23 +502,278 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
         return v;
     }
 
-    /** Frosted-glass panel: light top-to-bottom sheen, thin bright edge, rounded corners. */
-    private GradientDrawable glass(int radius, boolean strong) {
-        int top = strong ? 0x48FFFFFF : 0x2EFFFFFF;
-        int bottom = strong ? 0x22FFFFFF : 0x12FFFFFF;
-        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{top, bottom});
-        g.setCornerRadius(radius);
-        g.setStroke(Math.max(1, dp(1)), strong ? 0x66FFFFFF : 0x40FFFFFF);
-        return g;
+    /** Liquid-glass panel: samples the colourful backdrop behind it, bends light at the edge, bright rim. */
+    private Drawable glass(int radius, boolean strong) {
+        return new GlassDrawable(radius, false, false, strong, Math.max(1.5f, dp(1.5f)), backdrop);
     }
 
-    private GradientDrawable glassCircle() {
-        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{0x3CFFFFFF, 0x14FFFFFF});
-        g.setShape(GradientDrawable.OVAL);
-        g.setStroke(Math.max(1, dp(1)), 0x4DFFFFFF);
-        return g;
+    private Drawable glassCircle() {
+        return new GlassDrawable(0, true, false, false, Math.max(1.5f, dp(1.5f)), backdrop);
+    }
+
+    /** Light milky glass for small things inside lists, where position changes while scrolling. */
+    private Drawable glassFlat(int radius, boolean strong) {
+        return new GlassDrawable(radius, false, false, strong, Math.max(1.5f, dp(1.5f)), null);
+    }
+
+    /**
+     * Black-and-white backdrop: a dark base with big soft shapes whose curved edges glow bright.
+     * It is drawn on screen and also sampled by every glass panel, so the glass really bends it.
+     * (The album art is not used here; it stays in the art box.)
+     */
+    private Bitmap makeBackdrop(Bitmap art) {
+        int w = Math.max(96, getResources().getDisplayMetrics().widthPixels / 3);
+        int hh = Math.max(32, h / 3);
+        Bitmap out = Bitmap.createBitmap(w, hh, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(out);
+        c.drawColor(0xFF0C0C0C);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        int[] cols = {0x10FFFFFF, 0x1CFFFFFF, 0x98FFFFFF, 0x00FFFFFF};
+        float[] pos = {0f, 0.62f, 0.95f, 1f};
+        // cx, cy, r in unit space (scaled to the bitmap, so the shapes stretch with the screen)
+        float[][] blobs = {
+                {0.14f, -0.40f, 0.52f},
+                {1.02f, 0.62f, 0.40f},
+                {0.50f, 1.55f, 0.62f},
+                {0.72f, -0.38f, 0.26f},
+                {-0.06f, 1.12f, 0.30f}};
+        for (float[] bl : blobs) {
+            c.save();
+            c.scale(w, hh);
+            p.setShader(new RadialGradient(bl[0], bl[1], bl[2], cols, pos, Shader.TileMode.CLAMP));
+            c.drawCircle(bl[0], bl[1], bl[2], p);
+            c.restore();
+        }
+        return out;
+    }
+
+    private interface Backdrop {
+        Bitmap bitmap();
+        View anchor();
+    }
+
+    /** Seek bar like the reference: slim light track, white fill, dark glossy bead for the thumb. */
+    private void styleSeek(SeekBar s) {
+        int th = dp(4);
+        GradientDrawable bg = rounded(0x44FFFFFF, th / 2);
+        bg.setSize(1, th);
+        GradientDrawable fg = rounded(0xF0FFFFFF, th / 2);
+        fg.setSize(1, th);
+        LayerDrawable ld = new LayerDrawable(new Drawable[]{
+                bg, new ClipDrawable(fg, Gravity.START, ClipDrawable.HORIZONTAL)});
+        ld.setId(0, android.R.id.background);
+        ld.setId(1, android.R.id.progress);
+        s.setProgressDrawable(ld);
+        int ts = dp(16);
+        GradientDrawable thumb = new GradientDrawable();
+        thumb.setShape(GradientDrawable.OVAL);
+        thumb.setGradientType(GradientDrawable.RADIAL_GRADIENT);
+        thumb.setGradientRadius(ts * 0.8f);
+        thumb.setGradientCenter(0.35f, 0.3f);
+        thumb.setColors(new int[]{0xFF5C5C5C, 0xFF0A0A0A});
+        thumb.setStroke(Math.max(1, dp(1)), 0x80FFFFFF);
+        thumb.setSize(ts, ts);
+        s.setThumb(thumb);
+        s.setPadding(ts / 2, 0, ts / 2, 0);
+    }
+
+    /**
+     * Liquid-glass surface drawn by hand.
+     *  - body: the backdrop behind the panel, slightly brightened (clear glass)
+     *  - edge: the backdrop bent near the border. Eight thin bands, each pulled in a bit more
+     *    toward the edge, and each colour channel pulled a little differently, which gives the
+     *    rainbow fringe where bright and dark shapes meet the edge
+     *  - rim: a thin bright edge, brightest at the top-left and bottom-right
+     * With no backdrop (small list items) it falls back to plain milky glass.
+     */
+    private static class GlassDrawable extends Drawable {
+        private static final int BANDS = 8;
+        private static final float[] CH_SPLIT = {0.25f, 0f, -0.25f};   // red / green / blue bend a little differently
+
+        private final float radius, sw;
+        private final boolean oval, rimOnly, strong;
+        private final Backdrop bd;
+
+        private final Paint body = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint basePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint sheen = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint rim = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint glow = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint[][] bandPaint = new Paint[BANDS][3];
+        private final Path[] bands = new Path[BANDS];
+        private final RectF rf = new RectF();
+        private final RectF lb = new RectF();
+        private final Matrix mb = new Matrix();
+        private final Matrix m = new Matrix();
+        private final int[] loc = new int[2];
+        private final int[] aloc = new int[2];
+        private Bitmap shaderBmp;
+        private BitmapShader shBase;
+        private final BitmapShader[][] shBand = new BitmapShader[BANDS][3];
+        private final ColorMatrixColorFilter baseCf;
+        private final ColorMatrixColorFilter[] chanCf = new ColorMatrixColorFilter[3];
+        private float cx, cy, hw, hh, lensPx;
+        private final Paint shade = new Paint();
+
+        GlassDrawable(int radius, boolean oval, boolean rimOnly, boolean strong, float sw, Backdrop bd) {
+            this.radius = radius; this.oval = oval; this.rimOnly = rimOnly; this.strong = strong;
+            this.sw = sw; this.bd = bd;
+            shade.setColor(0x30000000);
+            rim.setStyle(Paint.Style.STROKE);
+            rim.setStrokeWidth(sw);
+            glow.setStyle(Paint.Style.STROKE);
+            glow.setStrokeWidth(sw * 2f);
+            glow.setColor(0x14FFFFFF);
+            baseCf = new ColorMatrixColorFilter(new float[]{
+                    1.08f, 0, 0, 0, 0,
+                    0, 1.08f, 0, 0, 0,
+                    0, 0, 1.08f, 0, 0,
+                    0, 0, 0, 1, 0});
+            // each of these keeps only one colour channel; added together they rebuild the image
+            chanCf[0] = new ColorMatrixColorFilter(new float[]{
+                    1.08f, 0, 0, 0, 0,  0, 0, 0, 0, 0,  0, 0, 0, 0, 0,  0, 0, 0, 1, 0});
+            chanCf[1] = new ColorMatrixColorFilter(new float[]{
+                    0, 0, 0, 0, 0,  0, 1.08f, 0, 0, 0,  0, 0, 0, 0, 0,  0, 0, 0, 1, 0});
+            chanCf[2] = new ColorMatrixColorFilter(new float[]{
+                    0, 0, 0, 0, 0,  0, 0, 0, 0, 0,  0, 0, 1.08f, 0, 0,  0, 0, 0, 1, 0});
+            PorterDuffXfermode add = new PorterDuffXfermode(PorterDuff.Mode.ADD);
+            for (int i = 0; i < BANDS; i++) {
+                for (int k = 0; k < 3; k++) {
+                    Paint bp = new Paint(Paint.ANTI_ALIAS_FLAG);
+                    bp.setColorFilter(chanCf[k]);
+                    bp.setXfermode(add);
+                    bandPaint[i][k] = bp;
+                }
+            }
+        }
+
+        @Override protected void onBoundsChange(Rect b) {
+            float l = b.left, t = b.top, r = b.right, bt = b.bottom;
+            float w = r - l, hgt = bt - t;
+            cx = (l + r) / 2f; cy = (t + bt) / 2f;
+            lb.set(b);
+            hw = w / 2f; hh = hgt / 2f;
+            boolean flat = bd == null;
+            body.setShader(new LinearGradient(0, t, 0, bt,
+                    flat ? (strong ? 0x40FFFFFF : 0x30FFFFFF) : 0x1CFFFFFF,
+                    flat ? (strong ? 0x14FFFFFF : 0x0CFFFFFF) : 0x08FFFFFF, Shader.TileMode.CLAMP));
+            sheen.setShader(new LinearGradient(0, t, 0, t + hgt * 0.45f,
+                    flat ? 0x33FFFFFF : 0x26FFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
+            rim.setShader(new LinearGradient(l, t, r, bt,
+                    new int[]{0xF2FFFFFF, 0x66FFFFFF, 0x66FFFFFF, 0xDDFFFFFF},
+                    new float[]{0f, 0.35f, 0.65f, 1f}, Shader.TileMode.CLAMP));
+            // bent-edge bands, outermost first
+            float lens = Math.min(sw * 10f, Math.min(w, hgt) / 3f);
+            lensPx = lens;
+            float rad = oval ? Math.min(w, hgt) / 2f : radius;
+            for (int i = 0; i < BANDS; i++) {
+                float in0 = lens * i / BANDS;
+                float in1 = lens * (i + 1) / BANDS;
+                Path outerP = shapePath(b, in0, rad);
+                Path innerP = shapePath(b, in1, rad);
+                outerP.op(innerP, Path.Op.DIFFERENCE);
+                bands[i] = outerP;
+            }
+        }
+
+        private Path shapePath(Rect b, float inset, float rad) {
+            RectF r = new RectF(b);
+            r.inset(inset, inset);
+            Path p = new Path();
+            if (oval) p.addOval(r, Path.Direction.CW);
+            else {
+                float rr = Math.max(0f, rad - inset);
+                p.addRoundRect(r, rr, rr, Path.Direction.CW);
+            }
+            return p;
+        }
+
+        private View hostView() {
+            Callback cb = getCallback();
+            while (cb instanceof Drawable) cb = ((Drawable) cb).getCallback();
+            return cb instanceof View ? (View) cb : null;
+        }
+
+        private void shape(Canvas c, Paint p) {
+            if (oval) c.drawOval(rf, p);
+            else c.drawRoundRect(rf, radius, radius, p);
+        }
+
+        @Override public void draw(Canvas c) {
+            Rect b = getBounds();
+            if (b.width() <= 0 || b.height() <= 0) return;
+            rf.set(b);
+            rf.inset(sw / 2f, sw / 2f);
+            if (!rimOnly) {
+                Bitmap bmp = bd != null ? bd.bitmap() : null;
+                View host = hostView();
+                View anchor = bd != null ? bd.anchor() : null;
+                if (bmp != null && host != null && anchor != null && anchor.getWidth() > 0 && anchor.getHeight() > 0) {
+                    if (shaderBmp != bmp) {
+                        shaderBmp = bmp;
+                        shBase = new BitmapShader(bmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+                        for (int i = 0; i < BANDS; i++)
+                            for (int k = 0; k < 3; k++)
+                                shBand[i][k] = new BitmapShader(bmp, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+                    }
+                    anchor.getLocationInWindow(aloc);
+                    host.getLocationInWindow(loc);
+                    float sx = anchor.getWidth() / (float) bmp.getWidth();
+                    float sy = anchor.getHeight() / (float) bmp.getHeight();
+                    mb.reset();
+                    mb.postScale(sx, sy);
+                    mb.postTranslate(aloc[0] - loc[0], aloc[1] - loc[1]);
+                    shBase.setLocalMatrix(mb);
+                    basePaint.setShader(shBase);
+                    basePaint.setColorFilter(baseCf);
+                    shape(c, basePaint);
+                    // bent edge: each band redraws the backdrop magnified, one colour channel at a time
+                    for (int i = 0; i < BANDS; i++) {
+                        c.save();
+                        c.clipPath(bands[i]);
+                        c.saveLayer(lb, null);
+                        for (int k = 0; k < 3; k++) {
+                            // Pull content in from the edge by a few pixels, most at the very edge and
+                            // fading to nothing deeper in. Each axis is scaled by its own half-size, so
+                            // the pull is the same on the long sides and the short sides.
+                            float f = (float) Math.pow(1f - (i + 0.5f) / BANDS, 1.5f);
+                            float dd = Math.min(lensPx * 0.8f * f * (1f + CH_SPLIT[k]), Math.min(hw, hh) * 0.45f);
+                            m.set(mb);
+                            m.postScale(hw / (hw - dd), hh / (hh - dd), cx, cy);
+                            shBand[i][k].setLocalMatrix(m);
+                            bandPaint[i][k].setShader(shBand[i][k]);
+                            c.drawRect(lb, bandPaint[i][k]);
+                        }
+                        c.restore();
+                        c.restore();
+                    }
+                }
+                if (bd != null) shape(c, shade);
+                shape(c, body);
+                shape(c, sheen);
+            }
+            // faint glow just inside the edge, then the thin bright rim
+            RectF g = new RectF(rf);
+            g.inset(sw * 1.5f, sw * 1.5f);
+            if (g.width() > 0 && g.height() > 0) {
+                if (oval) c.drawOval(g, glow);
+                else {
+                    float gr = Math.max(0f, radius - sw * 1.5f);
+                    c.drawRoundRect(g, gr, gr, glow);
+                }
+            }
+            if (oval) c.drawOval(rf, rim); else c.drawRoundRect(rf, radius, radius, rim);
+        }
+
+        @Override public void getOutline(Outline o) {
+            Rect b = getBounds();
+            if (oval) o.setOval(b); else o.setRoundRect(b, radius);
+            o.setAlpha(1f);
+        }
+
+        @Override public void setAlpha(int a) { }
+        @Override public void setColorFilter(ColorFilter f) { }
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
     }
 
     private GradientDrawable rounded(int color, int radius) {
@@ -532,7 +806,7 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
             a.setTextColor(current ? WHITE : 0xFFD0D0D0);
             a.setTypeface(current ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
             b.setText(artistOf(f));
-            row.setBackground(current ? glass(dp(8), true) : null);
+            row.setBackground(current ? glassFlat(dp(8), true) : null);
             return row;
         }
     }
@@ -605,15 +879,9 @@ public class PlayerActivity extends Activity implements PlayerService.Listener {
                             art.setColorFilter(DIM);
                             dominant = 0xFF161616;
                         }
-                        if (result != null) {
-                            // Two small scale steps with filtering give a cheap, smooth blur.
-                            Bitmap tiny = Bitmap.createScaledBitmap(result, 24, 24, true);
-                            Bitmap soft = Bitmap.createScaledBitmap(tiny, 96, 96, true);
-                            bgBlur.setImageBitmap(soft);
-                        } else {
-                            bgBlur.setImageDrawable(new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                                    new int[]{dominant, 0xFF000000}));
-                        }
+                        backdropBmp = makeBackdrop(result);
+                        bgBlur.setImageBitmap(backdropBmp);
+                        for (View gv : glassViews) gv.invalidate();
                     }
                 });
             }
